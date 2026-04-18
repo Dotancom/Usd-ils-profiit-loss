@@ -1,0 +1,3 @@
+@echo off
+echo Starting Portfolio Dashboard...
+streamlit run app.py
