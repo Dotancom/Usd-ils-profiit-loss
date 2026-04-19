@@ -2,97 +2,104 @@ import streamlit as st
 import yfinance as yf
 import datetime
 import pandas as pd
+import altair as alt
 
-st.set_page_config(page_title="מכונת זמן - שער הדולר", layout="wide")
+# השינוי כאן: layout="centered" במקום "wide"
+st.set_page_config(page_title="מכונת זמן - שער הדולר", layout="centered")
+
 st.title("⏱️ מכונת זמן - השוואת שער דולר היסטורי")
 
-st.sidebar.header("הגדרות בדיקה")
-usd_amount = st.sidebar.number_input("סכום בדולרים ($)", value=10000.0, step=100.0, format="%.2f")
+# יצירת אזורי תצוגה
+top_container = st.container()
+st.divider()
+chart_container = st.container()
+st.divider()
+bottom_container = st.container()
 
-# בחירת מצב עבודה (מתג בין אוטומטי לידני)
-st.sidebar.markdown("---")
-input_mode = st.sidebar.radio("מקור הנתונים לשערים:", ("משיכה אוטומטית (זמן אמת)", "הזנה ידנית (סימולציה)"))
-st.sidebar.markdown("---")
+current_fx = 0.0
+historical_fx = 0.0
+display_label = ""
+usd_input = 10000.0
 
-current_fx = None
-historical_fx = None
-display_date = "שער היסטורי"
-
-# לוגיקה למצב אוטומטי
-if input_mode == "משיכה אוטומטית (זמן אמת)":
-    today = datetime.date.today()
-    selected_date = st.sidebar.date_input("בחר תאריך היסטורי להשוואה", 
-                                          value=today - datetime.timedelta(days=365), 
-                                          max_value=today)
-    display_date = selected_date.strftime('%d/%m/%Y')
-
-    @st.cache_data(ttl=300) 
-    def get_current_rate():
-        ticker = yf.Ticker("ILS=X")
-        data = ticker.history(period="1d")
-        if data.empty:
-            raise ValueError("Yahoo Finance החזיר טבלה ריקה לשער הנוכחי.")
-        return data.Close.tolist().pop()
-
-    @st.cache_data
-    def get_historical_rate(date_obj):
-        ticker = yf.Ticker("ILS=X")
-        start_date = date_obj - datetime.timedelta(days=7)
-        end_date = date_obj + datetime.timedelta(days=1)
-        data = ticker.history(start=start_date, end=end_date)
-        if data.empty:
-             raise ValueError("לא נמצאו נתונים היסטוריים לתאריך המבוקש.")
-        return data.Close.tolist().pop()
-
-    with st.spinner("מושך שערי חליפין בזמן אמת מ-Yahoo Finance..."):
-        try:
-            current_fx = get_current_rate()
-            historical_fx = get_historical_rate(selected_date)
-        except Exception as e:
-            st.error(f"אירעה שגיאה טכנית. פירוט השגיאה: {e}")
-            st.stop()
-
-# לוגיקה למצב ידני
-else:
-    current_fx = st.sidebar.number_input("שער דולר נוכחי (₪)", value=3.70, step=0.01)
-    historical_fx = st.sidebar.number_input("שער דולר היסטורי (₪)", value=3.60, step=0.01)
-    display_date = "הוזן ידנית"
-
-
-# --- חישובים ותצוגת הדשבורד (רץ רק אם יש שערים) ---
-if current_fx and historical_fx:
-    current_value_ils = usd_amount * current_fx
-    historical_value_ils = usd_amount * historical_fx
+# --- אזור הבקרות (תחתית המסך) ---
+with bottom_container:
+    st.subheader("⚙️ הגדרות וסימולציה")
     
-    diff_ils = current_value_ils - historical_value_ils
-    pct_change = ((current_fx / historical_fx) - 1) * 100
-    
-    st.subheader(f"💵 ניתוח השווי עבור $ {usd_amount:,.2f}")
-    
-    col_fx_1, col_fx_2 = st.columns(2)
-    with col_fx_1:
-        st.info(f"**שער דולר נוכחי:** {current_fx:.4f} ₪")
-    with col_fx_2:
-        st.info(f"**שער היסטורי ({display_date}):** {historical_fx:.4f} ₪")
-    
-    st.markdown("### השוואת שווי בשקלים")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("שווי נוכחי (היום)", f"₪ {current_value_ils:,.2f}")
+    col_base1, col_base2 = st.columns(2)
+    with col_base1:
+        usd_input = st.number_input("סכום בדולרים ($)", value=10000.0, step=100.0, format="%.2f")
+    with col_base2:
+        mode = st.radio("מקור נתונים:", ("אוטומטי (מהבורסה)", "ידני (הקלדה)"), horizontal=True)
+
+    if mode == "אוטומטי (מהבורסה)":
+        today = datetime.date.today()
+        sel_date = st.date_input("בחר תאריך היסטורי להשוואה", value=today - datetime.timedelta(days=365), max_value=today)
+        display_label = sel_date.strftime('%d/%m/%Y')
         
-    with col2:
-        st.metric("שווי היסטורי (בעבר)", f"₪ {historical_value_ils:,.2f}")
+        @st.cache_data(ttl=300)
+        def get_data(d_obj):
+            t = yf.Ticker("ILS=X")
+            c = t.history(period="1d").Close.tolist().pop()
+            s = d_obj - datetime.timedelta(days=7)
+            h = t.history(start=s, end=d_obj + datetime.timedelta(days=1)).Close.tolist().pop()
+            return c, h
+
+        with st.spinner("מושך נתונים..."):
+            try:
+                current_fx, historical_fx = get_data(sel_date)
+            except Exception as e:
+                st.error("בעיה בחיבור לבורסה. ודא חיבור לאינטרנט.")
+    else:
+        c1, c2 = st.columns(2)
+        current_fx = c1.number_input("שער דולר נוכחי", value=3.7000, format="%.4f")
+        historical_fx = c2.number_input("שער היסטורי", value=3.6000, format="%.4f")
+        display_label = "הזנה ידנית"
+
+# --- אזור התוצאות (ראש המסך) והגרף ---
+if current_fx > 0 and historical_fx > 0:
+    val_now = usd_input * current_fx
+    val_then = usd_input * historical_fx
+    diff = val_now - val_then
+    pct = ((current_fx / historical_fx) - 1) * 100
+
+    with top_container:
+        st.subheader(f"💵 ניתוח השווי עבור $ {usd_input:,.2f}")
         
-    with col3:
-        delta_color = "normal" if diff_ils >= 0 else "inverse"
-        st.metric("הפרש / רווח מטבע", f"₪ {diff_ils:,.2f}", f"{pct_change:.2f}%", delta_color=delta_color)
-    
-    st.divider()
-    
-    # בניית הגרף (עם סוגריים עגולים כדי למנוע באגים)
-    chart_data = pd.DataFrame(
-        {"שווי (₪)": (historical_value_ils, current_value_ils)}, 
-        index=(f"בעבר ({display_date})", "היום")
-    )
-    st.bar_chart(chart_data, color="#2e7b54")
+        c_info1, c_info2 = st.columns(2)
+        with c_info1:
+            st.info(f"₪ שער דולר נוכחי: {current_fx:.4f}")
+        with c_info2:
+            st.info(f"₪ שער היסטורי ({display_label}): {historical_fx:.4f}")
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("### השוואת שווי בשקלים")
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("שווי נוכחי (היום)", f"₪ {val_now:,.2f}")
+        m2.metric("שווי היסטורי (בעבר)", f"₪ {val_then:,.2f}")
+        color = "normal" if diff >= 0 else "inverse"
+        m3.metric("הפרש / רווח מטבע", f"₪ {diff:,.2f}", f"{pct:.2f}%", delta_color=color)
+
+    # --- יצירת הגרף ---
+    with chart_container:
+        chart_data = pd.DataFrame({
+            "תקופה": (f"שווי היסטורי (בעבר)", "שווי נוכחי (היום)"),
+            "שווי": (val_then, val_now)
+        })
+        
+        color_scale = alt.Scale(domain=(f"שווי היסטורי (בעבר)", "שווי נוכחי (היום)"), range=('#A0AEC0', '#2E8B57'))
+        
+        bars = alt.Chart(chart_data).mark_bar(cornerRadiusTopLeft=5, cornerRadiusTopRight=5, size=80).encode(
+            x=alt.X('תקופה:N', sort=None, axis=alt.Axis(title="", labelAngle=0, labelFontSize=14)),
+            y=alt.Y('שווי:Q', axis=None),
+            color=alt.Color('תקופה:N', scale=color_scale, legend=None)
+        )
+        
+        text = bars.mark_text(align='center', baseline='bottom', dy=-10, fontSize=16, fontWeight='bold').encode(
+            text=alt.Text('שווי:Q', format=',.0f')
+        )
+        
+        final_chart = (bars + text).properties(height=350)
+        
+        # הדפסת הגרף ישירות ללא טריקים של עמודות רווח, כי כל המסך כבר ממורכז
+        st.altair_chart(final_chart, use_container_width=True)
